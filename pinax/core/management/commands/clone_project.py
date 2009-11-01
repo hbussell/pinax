@@ -273,7 +273,6 @@ def main(default_pinax_root, project_name, destination, verbose=True, requiremen
         raise CommandError("Files already exist at this path: %s" % (destination,))
     user_project_name = os.path.basename(destination)
     pinax_root = get_pinax_root(default_pinax_root)
-    import pdb;pdb.set_trace()
     if project_name in map(os.path.basename, get_projects(pinax_root)):
         source = os.path.join(get_projects_dir(pinax_root), project_name)
     else:
@@ -305,7 +304,6 @@ def main(default_pinax_root, project_name, destination, verbose=True, requiremen
     update_rename_deploy_files(os.path.join(destination, 'deploy'), project_name,
         user_project_name)
     if requirements:
-        import pdb;pdb.set_trace()
         requirements = os.path.join(os.getcwd(), destination, 'requirements.txt')
         if os.path.exists(requirements):
             if verbose:
