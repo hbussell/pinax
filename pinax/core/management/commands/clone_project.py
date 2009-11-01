@@ -1,22 +1,93 @@
 import glob
 import os
+from os import system
 import optparse
 import sys
 import shutil
 import re
 import random
 import pinax
+import pkg_resources
 
 from optparse import make_option
 from django.core.management.base import BaseCommand, CommandError
 
-EXCLUDED_PATTERNS = ('.svn','.pyc',)
+import xmlrpclib
+import logging
+import os
+import time
+import urllib2
+
+from xmlrpclib import Fault as XMLRPCFault
+
+EXCLUDED_PATTERNS = ('.svn',)
 DEFAULT_PINAX_ROOT = None # fallback to the normal PINAX_ROOT in settings.py.
 PINAX_ROOT_RE = re.compile(r'PINAX_ROOT\s*=.*$', re.M)
 SECRET_KEY_RE = re.compile(r'SECRET_KEY\s*=.*$', re.M)
 ROOT_URLCONF_RE = re.compile(r'ROOT_URLCONF\s*=.*$', re.M)
 VIRTUALENV_BASE_RE = re.compile(r'VIRTUALENV_BASE\s*=.*$', re.M)
 CHARS = 'abcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*(-_=+)'
+
+XML_RPC_SERVER = 'http://pypi.python.org/pypi'
+
+class ProxyTransport(xmlrpclib.Transport):
+    """
+    Provides an XMl-RPC transport routing via a http proxy.
+    
+    This is done by using urllib2, which in turn uses the environment
+    varable http_proxy and whatever else it is built to use (e.g. the
+    windows    registry).
+    
+    NOTE: the environment variable http_proxy should be set correctly.
+    See check_proxy_setting() below.
+    
+    Written from scratch but inspired by xmlrpc_urllib_transport.py
+    file from http://starship.python.net/crew/jjkunce/ by jjk.
+    
+    A. Ellerton 2006-07-06
+    """
+
+    def request(self, host, handler, request_body, verbose):
+        '''Send xml-rpc request using proxy'''
+        #We get a traceback if we don't have this attribute:
+        self.verbose = verbose
+        url = 'http://' + host + handler
+        request = urllib2.Request(url)
+        request.add_data(request_body)
+        # Note: 'Host' and 'Content-Length' are added automatically
+        request.add_header('User-Agent', self.user_agent)
+        request.add_header('Content-Type', 'text/xml')
+        proxy_handler = urllib2.ProxyHandler()
+        opener = urllib2.build_opener(proxy_handler)
+        fhandle = opener.open(request)
+        return(self.parse_response(fhandle))
+
+class CheeseShop:
+
+    """Interface to Python Package Index"""
+
+    def __init__(self, debug=False, no_cache=False):
+        """init"""
+        self.no_cache = no_cache
+        self.debug = debug
+        self.xmlrpc = self.get_xmlrpc_server()
+        self.logger = logging.getLogger("yolk")
+
+    def get_xmlrpc_server(self):
+        """
+        Returns PyPI's XML-RPC server instance
+        """
+        #check_proxy_setting()
+        try:
+            return xmlrpclib.Server(XML_RPC_SERVER, transport=ProxyTransport())
+        except IOError:
+            self.logger("ERROR: Can't connect to XML-RPC server: %s" \
+                    % XML_RPC_SERVER)
+
+    def search(self, spec, operator):
+        '''Query PYPI via XMLRPC interface using search spec'''
+        return self.xmlrpc.search(spec, operator.lower())
+
 
 def get_pinax_root(default_pinax_root):
     if default_pinax_root is None:
@@ -120,7 +191,73 @@ def update_rename_deploy_files(path, old_name, new_name):
     modpython_file.close()
 
 
-def main(default_pinax_root, project_name, destination, verbose=True):
+def is_package_project(name):
+    """Return true if the package contains the
+    keywords "pinax-project" in its setup.py keywords"""
+    dist = pkg_resources.get_distribution(name)
+    name = name.replace('-','_')
+    info_file = False
+    try:
+        location = os.path.join(dist.location, name +'-'+dist.version+'-py'+dist.py_version+'.egg-info')
+        if os.path.exists(location):
+            info_file = os.path.join(location, 'PKG-INFO')
+    except:
+        pass
+
+    try:
+        location = os.path.join(dist.location,name +'.egg-info')
+        if os.path.exists(location):
+            info_file = os.path.join(location, 'PKG-INFO')
+    except:
+        pass
+
+    if not info_file:
+        return False
+
+    if os.path.exists(info_file):
+        for line in open(info_file):
+            if line.find('Keywords:')==0:
+                if line.find('pinax-project')>-1:
+                    return True
+    return False         
+
+def get_package_toplevel(name):
+    name = name.replace('-','_')
+    dist = pkg_resources.get_distribution(name)    
+#    req = dist.as_requirement()
+#    egg = pkg_resources.working_set.find(req)
+    try:
+        location = os.path.join(dist.location, name +'-'+dist.version+'-py'+dist.py_version+'.egg-info')
+        if os.path.exists(location):
+            toplevel_file = os.path.join(location, 'top_level.txt')
+            return open(toplevel_file).read().strip()
+    except:
+        pass
+
+    try:
+        location = os.path.join(dist.location,name +'.egg-info')
+        if os.path.exists(location):
+            toplevel_file = os.path.join(location, 'top_level.txt')
+            return open(toplevel_file).read().strip()
+    except:
+        pass
+
+
+
+def get_project_apps():
+    """Find all installed packages that are pinax projects"""
+    env = pkg_resources.Environment()
+    projects = []
+    for name in env:
+#        if name=='social-commerce' or name=='social_commerce':
+        if is_package_project(name):
+            projects.append((name, get_package_toplevel(name)))
+    return projects
+
+def install_package(name):
+    system('pip install %s' % name)
+
+def main(default_pinax_root, project_name, destination, verbose=True, requirements=True):
     
     try:
         # check to see if the destination copies an existing module name
@@ -136,14 +273,26 @@ def main(default_pinax_root, project_name, destination, verbose=True):
         raise CommandError("Files already exist at this path: %s" % (destination,))
     user_project_name = os.path.basename(destination)
     pinax_root = get_pinax_root(default_pinax_root)
+    import pdb;pdb.set_trace()
     if project_name in map(os.path.basename, get_projects(pinax_root)):
         source = os.path.join(get_projects_dir(pinax_root), project_name)
     else:
-        if not os.path.exists(project_name):
-            print "Project template does not exist at this path: %s" % (
-                project_name,)
-            sys.exit(1)
-        source = project_name
+        try:
+            dist = pkg_resources.get_distribution(project_name)
+            source = os.path.join(dist.location, get_package_toplevel(project_name))
+        except:
+            pypi = CheeseShop()
+            pkgs = pypi.search({'keywords': 'pinax-project','name':project_name},'AND')
+            if len(pkgs)==1:
+                pkg = pkgs[0]
+                install_package(pkg['name'])
+                dist = pkg_resources.get_distribution(project_name)
+                source = os.path.join(dist.location, get_package_toplevel(project_name))
+            else:
+                print "Project template does not exist at this path: %s" % (project_name,)
+                sys.exit(0)
+    #source = dist.location
+
     if verbose:
         print "Copying your project to its new location"
     copytree(source, destination)
@@ -155,8 +304,16 @@ def main(default_pinax_root, project_name, destination, verbose=True):
         print "Renaming and updating your deployment files"
     update_rename_deploy_files(os.path.join(destination, 'deploy'), project_name,
         user_project_name)
+    if requirements:
+        import pdb;pdb.set_trace()
+        requirements = os.path.join(os.getcwd(), destination, 'requirements.txt')
+        if os.path.exists(requirements):
+            if verbose:
+                print "Installing project requirements..."
+            system('pip install -r %s' % (requirements,))
     if verbose:
         print "Finished cloning your project, now you may enjoy Pinax!"
+
 
 
 class Command(BaseCommand):
@@ -171,6 +328,11 @@ class Command(BaseCommand):
             default = DEFAULT_PINAX_ROOT,
             action = 'store_true',
             help = 'where Pinax lives on your system (defaults to Pinax in your virtual environment)'),
+        make_option('-d', '--deps', dest='requirements',
+            default = True,
+            action = 'store_true',
+            help = 'Install the app requirements'),
+
         make_option('-b', '--verbose', dest='verbose',
             action = 'store_false', default=True,
             help = 'enables verbose output'),
@@ -184,7 +346,6 @@ class Command(BaseCommand):
         Handle clone_project options and run main to perform clone_project
         operations.
         """
-        
         if options.get('list_projects'):
             pinax_root = get_pinax_root(options.get('pinax_root'))
             print "Available Projects"
@@ -196,6 +357,22 @@ class Command(BaseCommand):
                 for line in about.strip().splitlines():
                     print '    %s' % line
                 print
+            apps = get_project_apps()
+            for name, project in apps:
+                print "%s:" % name
+                about = getattr(__import__(project), '__about__', '')
+                for line in about.strip().splitlines():
+                    print '    %s' % line
+                print
+            print "------------------"
+            print "Projects on pypi.python.org"
+            print "------------------"
+            pypi = CheeseShop()
+            for pkg in pypi.search({'keywords': 'pinax-project'},'AND'):
+                print pkg['name']
+                for line in pkg['summary'].splitlines():
+                    print '    %s' % line
+
             sys.exit(0)
         
         if not args:
@@ -212,6 +389,8 @@ class Command(BaseCommand):
             sys.exit(0)
         
         main(options.get('pinax_root'), args[0], destination,
-            verbose = options.get('verbose')
+            verbose = options.get('verbose'),
+            requirements = options.get('requirements')
         )
         return 0
+
