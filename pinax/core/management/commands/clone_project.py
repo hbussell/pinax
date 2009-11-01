@@ -196,53 +196,20 @@ def is_package_project(name):
     keywords "pinax-project" in its setup.py keywords"""
     dist = pkg_resources.get_distribution(name)
     name = name.replace('-','_')
-    info_file = False
-    try:
-        location = os.path.join(dist.location, name +'-'+dist.version+'-py'+dist.py_version+'.egg-info')
-        if os.path.exists(location):
-            info_file = os.path.join(location, 'PKG-INFO')
-    except:
-        pass
-
-    try:
-        location = os.path.join(dist.location,name +'.egg-info')
-        if os.path.exists(location):
-            info_file = os.path.join(location, 'PKG-INFO')
-    except:
-        pass
-
-    if not info_file:
-        return False
-
-    if os.path.exists(info_file):
-        for line in open(info_file):
-            if line.find('Keywords:')==0:
-                if line.find('pinax-project')>-1:
-                    return True
+    info = []
+    if dist.has_metadata('PKG-INFO'):
+        info = dist.get_metadata('PKG-INFO').splitlines()
+    for line in info:
+        if line.find('Keywords:')==0:
+            if line.find('pinax-project')>-1:
+                return True
     return False         
 
 def get_package_toplevel(name):
     name = name.replace('-','_')
     dist = pkg_resources.get_distribution(name)    
-#    req = dist.as_requirement()
-#    egg = pkg_resources.working_set.find(req)
-    try:
-        location = os.path.join(dist.location, name +'-'+dist.version+'-py'+dist.py_version+'.egg-info')
-        if os.path.exists(location):
-            toplevel_file = os.path.join(location, 'top_level.txt')
-            return open(toplevel_file).read().strip()
-    except:
-        pass
-
-    try:
-        location = os.path.join(dist.location,name +'.egg-info')
-        if os.path.exists(location):
-            toplevel_file = os.path.join(location, 'top_level.txt')
-            return open(toplevel_file).read().strip()
-    except:
-        pass
-
-
+    if dist.has_metadata('top_level.txt'):
+        return dist.get_metadata('top_level.txt').splitlines()[0]
 
 def get_project_apps():
     """Find all installed packages that are pinax projects"""
